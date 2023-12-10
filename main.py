@@ -16,16 +16,12 @@ prompt_text = """
     Remember, your expertise is limited to HTML, CSS, and JavaScript.
 """
 
+#b64 encoder
 def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-prompt_text = """
-    You are an expert in HTML, CSS, and JavaScript. And only these 3 languages,
-    based on the image that you are given, you should generate the HTML, CSS and JavaScript 
-    code and output it and nothing else. Don't forget, you are an expert in HTML, CSS and JavaScript.
-    """
-
+#main api logic
 def send_to_gpt4_vision_api(encoded_image, api_key):
     headers = {
         "Content-Type": "application/json",
@@ -46,32 +42,41 @@ def send_to_gpt4_vision_api(encoded_image, api_key):
         "max_tokens": 300
     }
 
+    response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
+    return response.json()
+
+#prompt extraction logic - to properly display the given code correctly within their respective tabs
+def extract_code(content, marker_start, marker_end=None):
     try:
-        response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
-        response_data = response.json()
-        print("API Response:", json.dumps(response_data, indent=2))
-        return response_data
-    except json.JSONDecodeError as e:
-        print(f"JSON Error: {e}")
-        return None
-    except Exception as e:
-        print(f"Error: {e}")
-        return None
+        start = content.index(marker_start) + len(marker_start)
+        end = content.index(marker_end, start) if marker_end else len(content)
+        return content[start:end].strip()
+    except ValueError:
+        return ""
 
-
-
+#Image upload logic - will reset at every new uploaded image.
 def upload_image():
     global uploaded_image_path, status_label, convert_btn
     filetypes = [("Image files", "*.jpg *.jpeg *.png")]
     file_path = filedialog.askopenfilename(filetypes=filetypes)
     if file_path:
         uploaded_image_path = file_path
-        status_label.config(text="Image uploaded successfully!")
-        convert_btn.pack(side=tk.BOTTOM, pady=10)
+        print(f"New image path: {uploaded_image_path}") 
+
+        status_label.config(text="New image uploaded. Ready to convert.")
+        convert_btn.config(state=tk.NORMAL)  
+        # Clear the previous conversion results from the code tabs
+        html_text.delete(1.0, tk.END)
+        css_text.delete(1.0, tk.END)
+        js_text.delete(1.0, tk.END)
+        progress_bar.stop()
+        progress_bar.pack_forget()
+
+        print("Program state reset for new image conversion.")  # Debugging statement
     else:
         status_label.config(text="Image upload canceled.")
 
-
+# API Key verification logic
 def apply_api_key():
     global upload_btn, status_label
     api_key = api_key_entry.get()
@@ -95,6 +100,19 @@ def apply_api_key():
         messagebox.showerror("Error", f"Failed to verify API Key: {e}")
         status_label.config(text="Failed to verify API Key.")
 
+#Used to update the output from the API in its perspective tabs
+def update_code_tabs(html_code, css_code, js_code):
+    html_text.delete(1.0, tk.END)
+    css_text.delete(1.0, tk.END)
+    js_text.delete(1.0, tk.END)
+
+    html_text.insert(tk.END, html_code)
+    css_text.insert(tk.END, css_code)
+    js_text.insert(tk.END, js_code)
+
+    if not code_tabs.winfo_ismapped():
+        code_tabs.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
 
 def convert_image_to_code():
     global uploaded_image_path, api_key_entry, progress_bar, code_tabs
@@ -105,55 +123,40 @@ def convert_image_to_code():
     if not api_key:
         messagebox.showerror("Error", "Please apply your API key first.")
         return
+    
     encoded_image = encode_image(uploaded_image_path)
     progress_bar.pack(side=tk.TOP, fill=tk.X)
     progress_bar.start(10)
-    response_data = send_to_gpt4_vision_api(encoded_image, api_key)
-    progress_bar.stop()
-    progress_bar.pack_forget()
+    
+    response = send_to_gpt4_vision_api(encoded_image, api_key)
 
-    if response_data is None or 'error' in response_data:
-        messagebox.showerror("Error", "Failed to get a valid response from the API.")
-        return
+    try:
+        if response and 'choices' in response and len(response['choices']) > 0:
+            content = response['choices'][0]['message']['content']
+            
+            # Extract HTML, CSS, and JavaScript codes
+            html_code = extract_code(content, "HTML Code:", "CSS Code:")
+            css_code = extract_code(content, "CSS Code:", "JavaScript Code:")
+            js_code = extract_code(content, "JavaScript Code:", "")  # No ending marker
 
-    print("Response Type:", type(response_data))
-    print("Response Content:", response_data)
+            # Print the extracted code in the terminal (used for debugging)
+            print("HTML Code:\n", html_code)
+            print("\nCSS Code:\n", css_code)
+            print("\nJavaScript Code:\n", js_code)
 
-    # Assuming the response data has the structure you need
-    if 'choices' in response_data and len(response_data['choices']) > 0:
-        content = response_data['choices'][0].get('message', {}).get('content', '')
+            # Update the tabs with the extracted code
+            update_code_tabs(html_code, css_code, js_code)
+        else:
+            messagebox.showerror("Error", "The API call did not return any data.")
+    except Exception as e:
+        messagebox.showerror("Error", f"An error occurred: {e}")
+    finally:
+        progress_bar.stop()
+        progress_bar.pack_forget()
 
-        # Update the tabs with the content
-        code_tabs.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        html_tab = ttk.Frame(code_tabs)
-        css_tab = ttk.Frame(code_tabs)
-        js_tab = ttk.Frame(code_tabs)
-        code_tabs.add(html_tab, text='HTML')
-        code_tabs.add(css_tab, text='CSS')
-        code_tabs.add(js_tab, text='JavaScript')
-        html_text = tk.Text(html_tab)
-        css_text = tk.Text(css_tab)
-        js_text = tk.Text(js_tab)
-
-        # Here, you need to parse 'content' to extract HTML, CSS, and JavaScript
-        # This is a placeholder for the actual parsing logic
-        # Example: 
-        # html_code, css_code, js_code = parse_response_content(content)
-
-        html_text.insert(tk.END, html_code)
-        css_text.insert(tk.END, css_code)
-        js_text.insert(tk.END, js_code)
-        html_text.pack(expand=True, fill='both')
-        css_text.pack(expand=True, fill='both')
-        js_text.pack(expand=True, fill='both')
-    else:
-        messagebox.showerror("Error", "No data found in the API response.")
-
-
-
-
+#tkinter styles.
 def main():
-    global api_key_entry, status_label, upload_btn, convert_btn, progress_bar, code_tabs
+    global api_key_entry, status_label, upload_btn, convert_btn, progress_bar, code_tabs, html_text, css_text, js_text
     app = tk.Tk()
     app.title("Screenshot to Code Converter")
     app.geometry("600x600")
@@ -189,6 +192,23 @@ def main():
 
     convert_btn = ttk.Button(app, text="Convert", command=convert_image_to_code)
     convert_btn.pack(side=tk.TOP, pady=10)
+
+    html_tab = ttk.Frame(code_tabs)
+    css_tab = ttk.Frame(code_tabs)
+    js_tab = ttk.Frame(code_tabs)
+
+    code_tabs.add(html_tab, text='HTML')
+    code_tabs.add(css_tab, text='CSS')
+    code_tabs.add(js_tab, text='JavaScript')
+
+    html_text = tk.Text(html_tab)
+    css_text = tk.Text(css_tab)
+    js_text = tk.Text(js_tab)
+
+    html_text.pack(expand=True, fill='both')
+    css_text.pack(expand=True, fill='both')
+    js_text.pack(expand=True, fill='both')
+
 
     app.mainloop()
 
